@@ -39,6 +39,12 @@ enum editorKey
   PAGE_DOWN
 };
 
+enum editorHighlight
+{
+  HL_NORMAL = 0,
+  HL_NUMBER
+};
+
 /*** data ***/
 
 typedef struct erow
@@ -47,6 +53,7 @@ typedef struct erow
   int rsize;
   char *chars;
   char *render;
+  unsigned char *hl;
 } erow;
 
 struct editorConfig
@@ -248,6 +255,35 @@ int getWindowSize(int *rows, int *cols)
   }
 }
 
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row)
+{
+  row->hl = realloc(row->hl, row->rsize);
+  memset(row->hl, HL_NORMAL, row->rsize);
+
+  int i;
+  for (i = 0; i < row->rsize; i++)
+  {
+    if (isdigit(row->render[i]))
+    {
+      row->hl[i] = HL_NUMBER;
+    }
+  }
+}
+
+int editorSyntaxToColor(int hl)
+{
+  switch (hl)
+  {
+    case HL_NUMBER:
+      return 31;
+
+    default:
+      return 37;
+  }
+}
+
 /*** row operations ***/
 
 int editorRowCxToRx(erow *row, int cx)
@@ -317,6 +353,8 @@ void editorUpdateRow(erow *row)
   }
   row->render[idx] = '\0';
   row->rsize = idx;
+
+  editorUpdateSyntax(row);
 }
 
 void editorInsertRow(int at, char *s, size_t len)
@@ -336,6 +374,7 @@ void editorInsertRow(int at, char *s, size_t len)
 
   E.row[at].rsize = 0;
   E.row[at].render = NULL;
+  E.row[at].hl = NULL;
   editorUpdateRow(&E.row[at]);
 
   E.numrows++;
@@ -346,6 +385,7 @@ void editorFreeRow(erow *row)
 {
   free(row->render);
   free(row->chars);
+  free(row->hl);
 }
 
 void editorDelRow(int at)
@@ -495,7 +535,7 @@ void editorOpen(char *filename)
   while ((linelen = getline(&line, &linecap, fp)) != -1)
   {
     while (linelen > 0 && (line[linelen - 1] == '\n' ||
-                           line[linelen - 1] == '\r'))
+          line[linelen - 1] == '\r'))
     {
       linelen--;
     }
@@ -608,7 +648,7 @@ void editorFind()
   int saved_rowoff = E.rowoff;
 
   char *query = editorPrompt("Search: %s (Use ESC/Arrows/Enter)",
-                             editorFindCallback);
+      editorFindCallback);
 
   if (query)
   {
@@ -691,7 +731,7 @@ void editorDrawRows(struct abuf *ab)
       {
         char welcome[80];
         int welcomelen = snprintf(welcome, sizeof(welcome),
-          "Kilo editor -- version %s", KILO_VERSION);
+            "Kilo editor -- version %s", KILO_VERSION);
         if (welcomelen > E.screencols)
         {
           welcomelen = E.screencols;
@@ -725,20 +765,34 @@ void editorDrawRows(struct abuf *ab)
         len = E.screencols;
       }
       char *c = &E.row[filerow].render[E.coloff];
+      unsigned char *hl = &E.row[filerow].hl[E.coloff];
+      int current_color = -1;
       int j;
       for (j = 0; j < len; j++)
       {
-        if (isdigit(c[j]))
+        if (hl[j] == HL_NORMAL)
         {
-          abAppend(ab, "\x1b[31m", 5);
+          if (current_color != -1)
+          {
+            abAppend(ab, "\x1b[39m", 5);
+            current_color = -1;
+          }
           abAppend(ab, &c[j], 1);
-          abAppend(ab, "\x1b[39m", 5);
         }
         else
         {
+          int color = editorSyntaxToColor(hl[j]);
+          if (color != current_color)
+          {
+            current_color = color;
+            char buf[16];
+            int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color);
+            abAppend(ab, buf, clen);
+          }
           abAppend(ab, &c[j], 1);
         }
       }
+      abAppend(ab, "\x1b[39m", 5);
     }
 
     abAppend(ab, "\x1b[K", 3);
@@ -751,10 +805,10 @@ void editorDrawStatusBar(struct abuf *ab)
   abAppend(ab, "\x1b[7m", 4);
   char status[80], rstatus[80];
   int len = snprintf(status, sizeof(status), "%.20s - %d lines %s",
-    E.filename ? E.filename : "[No Name]", E.numrows,
-    E.dirty ? "(modified)" : "");
+      E.filename ? E.filename : "[No Name]", E.numrows,
+      E.dirty ? "(modified)" : "");
   int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d",
-    E.cy + 1, E.numrows);
+      E.cy + 1, E.numrows);
   if (len > E.screencols)
   {
     len = E.screencols;
@@ -806,7 +860,7 @@ void editorRefreshScreen()
 
   char buf[32];
   snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1,
-                                            (E.rx - E.coloff) + 1);
+      (E.rx - E.coloff) + 1);
   abAppend(&ab, buf, strlen(buf));
 
   abAppend(&ab, "\x1b[?25h", 6);
@@ -953,7 +1007,7 @@ void editorProcessKeypress()
       if (E.dirty && quit_times > 0)
       {
         editorSetStatusMessage("WARNING!!! File has unsaved changes. "
-          "Press Ctrl-Q %d more times to quit.", quit_times);
+            "Press Ctrl-Q %d more times to quit.", quit_times);
         quit_times--;
         return;
       }
@@ -1067,7 +1121,7 @@ int main(int argc, char *argv[])
   }
 
   editorSetStatusMessage(
-    "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
+      "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
 
   while (1)
   {
